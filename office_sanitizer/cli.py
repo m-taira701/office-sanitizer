@@ -1,5 +1,5 @@
 import argparse
-from office_sanitizer.excel import sanitize_excel
+from excel import sanitize_excel
 
 def main():
     parser = argparse.ArgumentParser()
