@@ -2,28 +2,21 @@
 from __future__ import annotations
 
 import os
-import shutil
-import tempfile
-import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Optional
 
 from openpyxl import load_workbook
 from openpyxl.worksheet.views import Selection
 
+from .common import CommonSanitizeOptions, iter_office_files, process_with_temp_copy, resolve_output_path, zip_sanitize_docprops
 
 @dataclass(frozen=True)
-class ExcelSanitizeOptions:
+class ExcelSanitizeOptions(CommonSanitizeOptions):
     # TODO 外部変数化
     zoom: int = 100
     focus_cell: str = "A1"
     set_first_sheet_active: bool = True
     remove_comments: bool = True  # cell comments / threaded comments
-    remove_metadata: bool = True  # core/custom/app props
-    recursive: bool = True
-    in_place: bool = True
-    output_dir: Optional[Path] = None  # if set, writes output here (keeps filename)
 
 
 def sanitize_excel(path: str | os.PathLike, options: ExcelSanitizeOptions = ExcelSanitizeOptions()) -> None:
@@ -41,7 +34,7 @@ def sanitize_excel(path: str | os.PathLike, options: ExcelSanitizeOptions = Exce
 
     targets: list[Path]
     if p.is_dir():
-        targets = list(_iter_xlsx_files(p, recursive=options.recursive))
+        targets = list(iter_office_files(p, "*.xlsx", recursive=options.recursive, skip_prefix="~$"))
     elif p.is_file():
         targets = [p]
     else:
@@ -51,49 +44,21 @@ def sanitize_excel(path: str | os.PathLike, options: ExcelSanitizeOptions = Exce
         _sanitize_one_xlsx(f, options)
 
 
-def _iter_xlsx_files(root: Path, recursive: bool) -> Iterable[Path]:
-    pattern = "**/*.xlsx" if recursive else "*.xlsx"
-    for f in root.glob(pattern):
-        # Skip Office temp files like "~$foo.xlsx"
-        if f.name.startswith("~$"):
-            continue
-        # Skip non-files (just in case)
-        if not f.is_file():
-            continue
-        yield f
-
-
 def _sanitize_one_xlsx(src: Path, options: ExcelSanitizeOptions) -> None:
     if src.suffix.lower() != ".xlsx":
         return
 
-    if options.output_dir is not None:
-        options.output_dir.mkdir(parents=True, exist_ok=True)
-        dst = options.output_dir / src.name
-    else:
-        dst = src if options.in_place else src.with_name(src.stem + ".sanitized.xlsx")
+    dst = resolve_output_path(src, options.in_place, options.output_dir, ".sanitized.xlsx")
 
-    # Work in a temp dir to avoid corrupting the original if something fails mid-way
-    with tempfile.TemporaryDirectory() as td:
-        td_path = Path(td)
-        tmp_workbook_path = td_path / "workbook.xlsx"
-
-        # Copy source to temp first (important for in_place writes)
-        shutil.copy2(src, tmp_workbook_path)
-
+    def processor(tmp_workbook_path: Path) -> None:
         # 1) openpyxl pass: zoom, selection, comments, basic properties
         _openpyxl_sanitize(tmp_workbook_path, options)
 
         # 2) zip-level pass: aggressively blank docProps/* metadata
         if options.remove_metadata:
-            _zip_sanitize_docprops(tmp_workbook_path)
+            zip_sanitize_docprops(tmp_workbook_path)
 
-        # Move into place
-        if dst.resolve() == src.resolve():
-            # in-place overwrite
-            shutil.copy2(tmp_workbook_path, dst)
-        else:
-            shutil.copy2(tmp_workbook_path, dst)
+    process_with_temp_copy(src, dst, processor)
 
 
 def _openpyxl_sanitize(xlsx_path: Path, options: ExcelSanitizeOptions) -> None:
@@ -169,85 +134,3 @@ def _openpyxl_sanitize(xlsx_path: Path, options: ExcelSanitizeOptions) -> None:
                 pass
 
 
-# --- Zip/XML sanitization (docProps) -----------------------------------------
-
-_CORE_NS = {
-    "cp": "http://schemas.openxmlformats.org/package/2006/metadata/core-properties",
-    "dc": "http://purl.org/dc/elements/1.1/",
-    "dcterms": "http://purl.org/dc/terms/",
-    "dcmitype": "http://purl.org/dc/dcmitype/",
-    "xsi": "http://www.w3.org/2001/XMLSchema-instance",
-}
-
-_CUSTOM_NS = {
-    "cp": "http://schemas.openxmlformats.org/officeDocument/2006/custom-properties",
-    "vt": "http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes",
-}
-
-_APP_NS = {
-    "ep": "http://schemas.openxmlformats.org/officeDocument/2006/extended-properties",
-    "vt": "http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes",
-}
-
-
-def _zip_sanitize_docprops(xlsx_path: Path) -> None:
-    with zipfile.ZipFile(xlsx_path, "r") as zin:
-        entries = {info.filename: zin.read(info.filename) for info in zin.infolist()}
-        compression = zin.compression
-
-    if "docProps/core.xml" in entries:
-        entries["docProps/core.xml"] = _minimal_core_xml()
-    if "docProps/custom.xml" in entries:
-        entries["docProps/custom.xml"] = _minimal_custom_xml()
-    if "docProps/app.xml" in entries:
-        entries["docProps/app.xml"] = _minimal_app_xml()
-
-    tmp = xlsx_path.with_suffix(".xlsx.tmp")
-    try:
-        with zipfile.ZipFile(tmp, "w", compression=compression) as zout:
-            for name, data in entries.items():
-                zout.writestr(name, data)
-        tmp.replace(xlsx_path)
-    finally:
-        if tmp.exists():
-            try:
-                tmp.unlink()
-            except Exception:
-                pass
-
-
-def _minimal_core_xml() -> bytes:
-    # Minimal core-properties container with namespaces declared.
-    # Leaving it empty avoids leaking creator/modifiedBy/timestamps/etc.
-    xml = (
-        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-        f'<cp:coreProperties'
-        f' xmlns:cp="{_CORE_NS["cp"]}"'
-        f' xmlns:dc="{_CORE_NS["dc"]}"'
-        f' xmlns:dcterms="{_CORE_NS["dcterms"]}"'
-        f' xmlns:dcmitype="{_CORE_NS["dcmitype"]}"'
-        f' xmlns:xsi="{_CORE_NS["xsi"]}">'
-        f"</cp:coreProperties>"
-    )
-    return xml.encode("utf-8")
-
-
-def _minimal_custom_xml() -> bytes:
-    # Minimal custom-properties container.
-    xml = (
-        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-        f'<Properties xmlns="{_CUSTOM_NS["cp"]}" xmlns:vt="{_CUSTOM_NS["vt"]}">'
-        f"</Properties>"
-    )
-    return xml.encode("utf-8")
-
-
-def _minimal_app_xml() -> bytes:
-    # Extended properties can include Company/Manager etc.
-    # Provide minimal container; Office regenerates some fields but avoids embedding org data.
-    xml = (
-        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-        f'<Properties xmlns="{_APP_NS["ep"]}" xmlns:vt="{_APP_NS["vt"]}">'
-        f"</Properties>"
-    )
-    return xml.encode("utf-8")
