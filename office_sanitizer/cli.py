@@ -5,6 +5,7 @@ from pathlib import Path
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from office_sanitizer.docx import sanitize_docx
 from office_sanitizer.excel import sanitize_excel
 from office_sanitizer.pptx import sanitize_pptx
 
@@ -16,6 +17,7 @@ def main():
     p = Path(args.path)
     if p.is_dir():
         sanitize_excel(args.path)
+        sanitize_docx(args.path)
         sanitize_pptx(args.path)
         return
 
@@ -23,6 +25,9 @@ def main():
         ext = p.suffix.lower()
         if ext == ".xlsx":
             sanitize_excel(args.path)
+            return
+        if ext == ".docx":
+            sanitize_docx(args.path)
             return
         if ext == ".pptx":
             sanitize_pptx(args.path)
