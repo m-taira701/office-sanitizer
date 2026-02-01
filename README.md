@@ -1,24 +1,25 @@
 # office-sanitizer
 
-Office成果物（主に Excel / PowerPoint）を**納品前に安全な状態へ整形・サニタイズ**するためのCLIツール。
+Office成果物（Excel / PowerPoint / Word）を納品前に安全な状態へ整形・サニタイズするためのCLIツール。
 
 - 作成者・編集履歴・会社名などのメタデータを除去
 - Excelの表示状態（倍率・選択セル）を統一
+- コメントや変更履歴などの痕跡を削除
 - 人手作業を前提にしない（CI/CDで自動実行できる設計）
 
 ---
 
 ## Motivation / Why
 
-Officeファイル（.xlsx / .pptx など）には、次のような情報が意図せず残りやすい。
+Officeファイル（.xlsx / .pptx / .docx）には、次のような情報が意図せず残りやすい。
 
 - 作成者 / 最終更新者
 - 作成日時 / 更新日時
 - 会社名・組織名（app properties）
 - 表示倍率・選択セル・表示位置
-- コメント・ノート
+- コメント・ノート・変更履歴
 
-納品前に毎回これらを**人手で確認・削除するのは再現性が低く、事故りやすい**。
+納品前に毎回これらを人手で確認・削除するのは再現性が低く、事故りやすい。
 
 このツールは、
 
@@ -34,9 +35,9 @@ Officeファイル（.xlsx / .pptx など）には、次のような情報が意
 ### 対応状況（v0.x）
 
 - 対応ファイル
-  - ✅ Excel (.xlsx)
-  - ❌ PowerPoint (.pptx)（未実装）
-  - ❌ Word (.docx)（未実装）
+  - Excel (.xlsx)
+  - PowerPoint (.pptx)
+  - Word (.docx)
 
 ### Excelで行っている処理
 
@@ -50,11 +51,31 @@ Officeファイル（.xlsx / .pptx など）には、次のような情報が意
   - Threaded comment は best-effort
 
 - メタデータ削除
-  - `docProps/core.xml`（作成者・日時など）
-  - `docProps/custom.xml`（カスタムプロパティ）
-  - `docProps/app.xml`（Company / Manager 等）
+  - core.xml（作成者・日時など）
+  - custom.xml（カスタムプロパティ）
+  - app.xml（Company / Manager 等）
 
-※ openpyxl だけに依存せず、zip を直接再構築することで**確実性を優先**している。
+※ openpyxl だけに依存せず、zip を直接再構築することで確実性を優先している。
+
+---
+
+## PowerPointで行っている処理
+
+- コメント削除
+  - comments*.xml / slideComments*.xml / commentAuthors.xml
+- メタデータ削除
+  - core.xml / custom.xml / app.xml
+
+---
+
+## Wordで行っている処理
+
+- コメント削除
+  - comments.xml / commentsExtended.xml / commentsEx.xml / commentsIds.xml / people.xml
+  - 本文側の comment 参照 (commentRangeStart/End/commentReference/commentId)
+  - 変更履歴 (tracked changes) の削除
+- メタデータ削除
+  - core.xml / custom.xml / app.xml
 
 ---
 
@@ -80,10 +101,10 @@ pip install office-sanitizer
 ### ローカル実行
 
 ```bash
-office-sanitizer ./docs
+office-sanitizer ./directory
 ```
 
-- 指定したディレクトリ配下の `.xlsx` を再帰的に処理
+- 指定したディレクトリ配下の(`.xlsx`,`.docs`,`.ppt`)を再帰的に処理
 - `~$` で始まる Office 一時ファイルは自動的に除外
 
 ### 単一ファイル
@@ -101,18 +122,15 @@ office-sanitizer ./sample.xlsx
 
 ## Planned Features / Next Steps
 
-### 1. PowerPoint (.pptx) 対応
+### 1. PowerPoint (.pptx) 強化
 
-- コメント削除
-- ノート削除
-- メタデータ（docProps）削除
-- 初期表示スライドの正規化
+- スピーカーノートの削除
+- 表示状態の正規化
 
-### 2. Word (.docx) 対応
+### 2. Word (.docx) 強化
 
-- メタデータ削除
-- コメント削除
-- トラックバック（変更履歴）削除
+- 変更履歴の "final" 反映 (accept/reject 相当)
+- 追加メタデータ/埋め込み要素の削除強化
 
 ### 3. CI/CD 統合
 
