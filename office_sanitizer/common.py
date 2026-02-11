@@ -78,7 +78,7 @@ def zip_rewrite(path: Path, rewrite_fn: Callable[[str, bytes], bytes | None | _D
 
     tmp = path.with_suffix(path.suffix + ".tmp")
     try:
-        with zipfile.ZipFile(tmp, "w", compression=compression) as zout:
+        with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as zout:
             for name, data in out_entries:
                 zout.writestr(name, data)
         tmp.replace(path)
