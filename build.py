@@ -38,6 +38,17 @@ def main():
     # Windows specific
     if sys.platform == "win32":
         args.append("--windows-disable-console")
+        
+        # Add metadata to reduce false positives
+        args.extend([
+            "--windows-company-name=OfficeSanitizerProject",
+            "--windows-product-name=Office Sanitizer",
+            "--windows-file-version=1.0.0.0",
+            "--windows-product-version=1.0.0.0",
+            "--windows-file-description=Office Sanitizer Application",
+            "--copyright=Copyright (C) 2026 OfficeSanitizer Project",
+        ])
+
         icon_path = root_dir / "resources" / "icon.ico"
         if icon_path.exists():
             args.append(f"--windows-icon-from-ico={icon_path}")
