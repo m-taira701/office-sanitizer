@@ -1,23 +1,51 @@
-# office_sanitizer/common.py
+# office_sanitizer/core/utils.py
 from __future__ import annotations
 
 import shutil
 import tempfile
 import zipfile
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable, Optional
 
+# --- Constants for XML Namespaces ---
 
-@dataclass(frozen=True)
-class CommonSanitizeOptions:
-    remove_metadata: bool = True  # core/custom/app props
-    recursive: bool = True
-    in_place: bool = True
-    output_dir: Optional[Path] = None  # if set, writes output here (keeps filename)
+CORE_NS = {
+    "cp": "http://schemas.openxmlformats.org/package/2006/metadata/core-properties",
+    "dc": "http://purl.org/dc/elements/1.1/",
+    "dcterms": "http://purl.org/dc/terms/",
+    "dcmitype": "http://purl.org/dc/dcmitype/",
+    "xsi": "http://www.w3.org/2001/XMLSchema-instance",
+}
 
+CUSTOM_NS = {
+    "cp": "http://schemas.openxmlformats.org/officeDocument/2006/custom-properties",
+    "vt": "http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes",
+}
+
+APP_NS = {
+    "ep": "http://schemas.openxmlformats.org/officeDocument/2006/extended-properties",
+    "vt": "http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes",
+}
+
+
+# --- Resource Path Helper ---
+
+def get_resource_path(relative_path: str) -> Path:
+    """
+    Get absolute path to resource.
+    Nuitka preserves __file__ even in --onefile mode (pointing to the temp dir),
+    so we can rely on relative paths from this file.
+    """
+    # office_sanitizer/core/utils.py -> office_sanitizer/core/ -> office_sanitizer/ -> root/
+    base_path = Path(__file__).parent.parent.parent
+    return base_path / relative_path
+
+
+
+# --- File Iteration & Path Resolution ---
 
 def iter_office_files(root: Path, pattern: str, recursive: bool, skip_prefix: Optional[str] = None) -> Iterable[Path]:
+    """Iterate over files matching a pattern, optionally recursively."""
     glob_pattern = f"**/{pattern}" if recursive else pattern
     for f in root.glob(glob_pattern):
         if skip_prefix and f.name.startswith(skip_prefix):
@@ -28,6 +56,7 @@ def iter_office_files(root: Path, pattern: str, recursive: bool, skip_prefix: Op
 
 
 def resolve_output_path(src: Path, in_place: bool, output_dir: Optional[Path], suffix: str) -> Path:
+    """Determine the destination path based on options."""
     if output_dir is not None:
         output_dir.mkdir(parents=True, exist_ok=True)
         return output_dir / src.name
@@ -37,7 +66,10 @@ def resolve_output_path(src: Path, in_place: bool, output_dir: Optional[Path], s
 
 
 def process_with_temp_copy(src: Path, dst: Path, processor: Callable[[Path], None]) -> None:
-    # Work in a temp dir to avoid corrupting the original if something fails mid-way
+    """
+    Copy source to a temp file, process it, then move/copy to destination.
+    Safe against corruption/interruption.
+    """
     with tempfile.TemporaryDirectory() as td:
         td_path = Path(td)
         tmp_path = td_path / src.name
@@ -50,12 +82,17 @@ def process_with_temp_copy(src: Path, dst: Path, processor: Callable[[Path], Non
 
         # Move into place
         if dst.resolve() == src.resolve():
+            # If in-place, copy back over original
             shutil.copy2(tmp_path, dst)
         else:
+            # If new destination
             shutil.copy2(tmp_path, dst)
 
 
+# --- ZIP Manipulation ---
+
 class _DeleteEntry:
+    """Sentinel object to indicate an entry should be deleted."""
     pass
 
 
@@ -63,6 +100,9 @@ DELETE_ENTRY = _DeleteEntry()
 
 
 def zip_rewrite(path: Path, rewrite_fn: Callable[[str, bytes], bytes | None | _DeleteEntry]) -> None:
+    """
+    Rewrite a zip file in-place by iterating over entries and applying a rewrite function.
+    """
     with zipfile.ZipFile(path, "r") as zin:
         entries = [(info.filename, zin.read(info.filename)) for info in zin.infolist()]
         compression = zin.compression
@@ -70,7 +110,7 @@ def zip_rewrite(path: Path, rewrite_fn: Callable[[str, bytes], bytes | None | _D
     out_entries: list[tuple[str, bytes]] = []
     for name, data in entries:
         new_data = rewrite_fn(name, data)
-        if new_data is DELETE_ENTRY:
+        if isinstance(new_data, _DeleteEntry):
             continue
         if new_data is None:
             new_data = data
@@ -90,63 +130,45 @@ def zip_rewrite(path: Path, rewrite_fn: Callable[[str, bytes], bytes | None | _D
                 pass
 
 
-_CORE_NS = {
-    "cp": "http://schemas.openxmlformats.org/package/2006/metadata/core-properties",
-    "dc": "http://purl.org/dc/elements/1.1/",
-    "dcterms": "http://purl.org/dc/terms/",
-    "dcmitype": "http://purl.org/dc/dcmitype/",
-    "xsi": "http://www.w3.org/2001/XMLSchema-instance",
-}
-
-_CUSTOM_NS = {
-    "cp": "http://schemas.openxmlformats.org/officeDocument/2006/custom-properties",
-    "vt": "http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes",
-}
-
-_APP_NS = {
-    "ep": "http://schemas.openxmlformats.org/officeDocument/2006/extended-properties",
-    "vt": "http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes",
-}
-
+# --- Metadata Sanitization Helpers ---
 
 def minimal_core_xml() -> bytes:
-    # Minimal core-properties container with namespaces declared.
-    # Leaving it empty avoids leaking creator/modifiedBy/timestamps/etc.
+    """Minimal core-properties container."""
     xml = (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         f'<cp:coreProperties'
-        f' xmlns:cp="{_CORE_NS["cp"]}"'
-        f' xmlns:dc="{_CORE_NS["dc"]}"'
-        f' xmlns:dcterms="{_CORE_NS["dcterms"]}"'
-        f' xmlns:dcmitype="{_CORE_NS["dcmitype"]}"'
-        f' xmlns:xsi="{_CORE_NS["xsi"]}">'
+        f' xmlns:cp="{CORE_NS["cp"]}"'
+        f' xmlns:dc="{CORE_NS["dc"]}"'
+        f' xmlns:dcterms="{CORE_NS["dcterms"]}"'
+        f' xmlns:dcmitype="{CORE_NS["dcmitype"]}"'
+        f' xmlns:xsi="{CORE_NS["xsi"]}">'
         f"</cp:coreProperties>"
     )
     return xml.encode("utf-8")
 
 
 def minimal_custom_xml() -> bytes:
-    # Minimal custom-properties container.
+    """Minimal custom-properties container."""
     xml = (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-        f'<Properties xmlns="{_CUSTOM_NS["cp"]}" xmlns:vt="{_CUSTOM_NS["vt"]}">'
+        f'<Properties xmlns="{CUSTOM_NS["cp"]}" xmlns:vt="{CUSTOM_NS["vt"]}">'
         f"</Properties>"
     )
     return xml.encode("utf-8")
 
 
 def minimal_app_xml() -> bytes:
-    # Extended properties can include Company/Manager etc.
-    # Provide minimal container; Office regenerates some fields but avoids embedding org data.
+    """Minimal extended-properties container."""
     xml = (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-        f'<Properties xmlns="{_APP_NS["ep"]}" xmlns:vt="{_APP_NS["vt"]}">'
+        f'<Properties xmlns="{APP_NS["ep"]}" xmlns:vt="{APP_NS["vt"]}">'
         f"</Properties>"
     )
     return xml.encode("utf-8")
 
 
-def zip_sanitize_docprops(xlsx_path: Path) -> None:
+def zip_sanitize_docprops(zip_path: Path) -> None:
+    """Rewrite docProps/*.xml with minimal versions."""
     def rewrite(name: str, data: bytes) -> bytes | None:
         if name == "docProps/core.xml":
             return minimal_core_xml()
@@ -156,4 +178,4 @@ def zip_sanitize_docprops(xlsx_path: Path) -> None:
             return minimal_app_xml()
         return None
 
-    zip_rewrite(xlsx_path, rewrite)
+    zip_rewrite(zip_path, rewrite)

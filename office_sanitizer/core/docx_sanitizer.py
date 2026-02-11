@@ -1,60 +1,81 @@
-# office_sanitizer/docx.py
+# office_sanitizer/core/docx_sanitizer.py
 from __future__ import annotations
 
+import logging
 import os
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
-from .common import CommonSanitizeOptions, iter_office_files, process_with_temp_copy, resolve_output_path, zip_rewrite, zip_sanitize_docprops
+from .base import Sanitizer, CommonSanitizeOptions
+from .utils import (
+    iter_office_files,
+    resolve_output_path,
+    process_with_temp_copy,
+    zip_rewrite,
+    zip_sanitize_docprops,
+)
 
+logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class WordSanitizeOptions(CommonSanitizeOptions):
+    """
+    Wordサニタイズオプション
+    
+    Attributes:
+        remove_comments (bool): コメントを削除するかどうか。
+        remove_revisions (bool): 変更履歴を削除するかどうか。
+    """
     remove_comments: bool = True
     remove_revisions: bool = True
 
 
-def sanitize_docx(path: str | os.PathLike, options: WordSanitizeOptions = WordSanitizeOptions()) -> None:
-    """
-    Sanitize .docx files:
-      - Remove comments (optional)
-      - Remove tracked changes (optional)
-      - Remove metadata (docProps/core.xml, docProps/custom.xml, docProps/app.xml) (optional)
+class DocxSanitizer(Sanitizer):
+    def sanitize(self, path: str | os.PathLike, options: WordSanitizeOptions = WordSanitizeOptions()) -> None:
+        """
+        Wordファイル(.docx)をサニタイズします。
+        
+        Args:
+            path: ファイルまたはディレクトリのパス
+            options: サニタイズオプション (WordSanitizeOptions)
+        """
+        p = Path(path)
 
-    Accepts a file or directory. Directory mode finds *.docx (skips temp "~$" files).
-    """
-    p = Path(path)
+        targets: list[Path]
+        if p.is_dir():
+            targets = list(iter_office_files(p, "*.docx", recursive=options.recursive, skip_prefix="~$"))
+        elif p.is_file():
+            targets = [p]
+        else:
+            raise FileNotFoundError(f"Path not found: {p}")
 
-    targets: list[Path]
-    if p.is_dir():
-        targets = list(iter_office_files(p, "*.docx", recursive=options.recursive, skip_prefix="~$"))
-    elif p.is_file():
-        targets = [p]
-    else:
-        raise FileNotFoundError(f"Path not found: {p}")
+        for f in targets:
+            try:
+                self._sanitize_one_docx(f, options)
+                logger.info(f"サニタイズ完了: {f.name}")
+            except Exception as e:
+                logger.error(f"サニタイズ失敗: {f.name} - {str(e)}")
 
-    for f in targets:
-        _sanitize_one_docx(f, options)
+    def _sanitize_one_docx(self, src: Path, options: WordSanitizeOptions) -> None:
+        if src.suffix.lower() != ".docx":
+            return
+
+        dst = resolve_output_path(src, options.in_place, options.output_dir, ".sanitized.docx")
+
+        def processor(tmp_docx_path: Path) -> None:
+            if options.remove_comments:
+                _zip_sanitize_comments(tmp_docx_path)
+            if options.remove_revisions:
+                _zip_sanitize_revisions(tmp_docx_path)
+
+            if options.remove_metadata:
+                zip_sanitize_docprops(tmp_docx_path)
+
+        process_with_temp_copy(src, dst, processor)
 
 
-def _sanitize_one_docx(src: Path, options: WordSanitizeOptions) -> None:
-    if src.suffix.lower() != ".docx":
-        return
-
-    dst = resolve_output_path(src, options.in_place, options.output_dir, ".sanitized.docx")
-
-    def processor(tmp_docx_path: Path) -> None:
-        if options.remove_comments:
-            _zip_sanitize_comments(tmp_docx_path)
-        if options.remove_revisions:
-            _zip_sanitize_revisions(tmp_docx_path)
-
-        if options.remove_metadata:
-            zip_sanitize_docprops(tmp_docx_path)
-
-    process_with_temp_copy(src, dst, processor)
-
+# --- XML / ZIP Utilities for Word ---
 
 _WORD_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 
