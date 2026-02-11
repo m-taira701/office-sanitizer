@@ -1,169 +1,72 @@
-# office-sanitizer
+# Office Sanitizer
 
-Office成果物（Excel / PowerPoint / Word）を納品前に安全な状態へ整形・サニタイズするためのCLIツール。
+Officeファイル（Excel, Word, PowerPoint）のメタデータ、コメント、変更履歴を一括削除するデスクトップアプリケーション。
 
-- 作成者・編集履歴・会社名などのメタデータを除去
-- Excelの表示状態（倍率・選択セル）を統一
-- コメントや変更履歴などの痕跡を削除
-- 人手作業を前提にしない（CI/CDで自動実行できる設計）
+## 特徴
+- **堅牢なサニタイズ処理**: 内部構造（XML）を直接操作し、メタデータやコメントを確実に削除。
+- **モダンなGUI (PySide6)**: ダークモード対応、ドラッグ&ドロップ対応。
+- **CLI対応**: 自動化スクリプト等で使えるコマンドラインインターフェース。
+- **クロスプラットフォーム**: Windows/Mac対応（Pythonが動く環境）。
 
----
+## 必要要件
+- Python 3.8+ (推奨: **Python 3.13**)
+- PySide6
+- openpyxl
 
-## Motivation / Why
-
-Officeファイル（.xlsx / .pptx / .docx）には、次のような情報が意図せず残りやすい。
-
-- 作成者 / 最終更新者
-- 作成日時 / 更新日時
-- 会社名・組織名（app properties）
-- 表示倍率・選択セル・表示位置
-- コメント・ノート・変更履歴
-
-納品前に毎回これらを人手で確認・削除するのは再現性が低く、事故りやすい。
-
-このツールは、
-
-> 「納品前チェックリスト」をコード化し、
-> **誰が・どこで実行しても同じ状態**を作る
-
-ことを目的としている。
-
----
-
-## Current Status
-
-### 対応状況（v0.x）
-
-- 対応ファイル
-  - Excel (.xlsx)
-  - PowerPoint (.pptx)
-  - Word (.docx)
-
-### Excelで行っている処理
-
-- 表示状態の正規化
-  - 表示倍率を 100% に設定
-  - アクティブセルを A1 に設定
-  - 最初のシートをアクティブに設定
-
-- コメント削除
-  - セルコメントを削除
-  - Threaded comment は best-effort
-
-- メタデータ削除
-  - core.xml（作成者・日時など）
-  - custom.xml（カスタムプロパティ）
-  - app.xml（Company / Manager 等）
-
-※ openpyxl だけに依存せず、zip を直接再構築することで確実性を優先している。
-
----
-
-## PowerPointで行っている処理
-
-- コメント削除
-  - comments*.xml / slideComments*.xml / commentAuthors.xml
-- メタデータ削除
-  - core.xml / custom.xml / app.xml
-
----
-
-## Wordで行っている処理
-
-- コメント削除
-  - comments.xml / commentsExtended.xml / commentsEx.xml / commentsIds.xml / people.xml
-  - 本文側の comment 参照 (commentRangeStart/End/commentReference/commentId)
-  - 変更履歴 (tracked changes) の削除
-- メタデータ削除
-  - core.xml / custom.xml / app.xml
-
----
-
-## Non-Goals（やらないこと）
-
-- Officeファイルの完全匿名化
-- マクロ（VBA）の解析・改変
-- 表示内容（セル値・数式・レイアウト）の変更
-- 既存のドキュメント構造の最適化
-
----
-
-## Usage
-
-### インストール（予定）
+## インストール
 
 ```bash
-pip install office-sanitizer
+pip install -r requirements.txt
 ```
 
-※ 現状はリポジトリを直接 clone しての利用を想定。
+## 使い方
 
-### ローカル実行
+### GUIモード
 
 ```bash
-office-sanitizer ./directory
+python main.py
 ```
+起動後、ファイルをドラッグ&ドロップし、設定を確認して「サニタイズ実行」ボタンを押してください。
 
-- 指定したディレクトリ配下の(`.xlsx`,`.docs`,`.ppt`)を再帰的に処理
-- `~$` で始まる Office 一時ファイルは自動的に除外
-
-### 単一ファイル
+### CLIモード
 
 ```bash
-office-sanitizer ./sample.xlsx
+# ヘルプ表示
+python main.py --help
+
+# ファイル単体処理
+python main.py target.docx
+
+# ディレクトリ一括処理（再帰的）
+python main.py ./docs_folder -r
+
+# 元ファイルを上書きする場合
+python main.py target.xlsx --inplace
 ```
 
-### 挙動
+## ビルド (exe/app化)
 
-- デフォルトでは **in-place（上書き）**
-- 内部的には temp ファイルを経由して安全に置換
+[Nuitka](https://nuitka.net/) を使用して高速なシングルバイナリを作成します。
+**注意**: 安定動作のため、**Python 3.13** 環境でのビルドを推奨します。
 
----
+1. アイコンを設定する場合: `resources/icon.ico` (Windows) または `resources/icon.icns` (Mac) を配置してください。
+2. ビルドスクリプトを実行:
 
-## Planned Features / Next Steps
+```bash
+# Nuitkaとzstandardがインストールされていることを確認
+pip install nuitka zstandard
 
-### 1. PowerPoint (.pptx) 強化
-
-- スピーカーノートの削除
-- 表示状態の正規化
-
-### 2. Word (.docx) 強化
-
-- 変更履歴の "final" 反映 (accept/reject 相当)
-- 追加メタデータ/埋め込み要素の削除強化
-
-### 3. CI/CD 統合
-
-- GitHub Actions
-- GitLab CI / Runner
-
-例：
-
-```yaml
-- uses: yourname/office-sanitizer@v1
-  with:
-    path: docs/
+python build.py
 ```
 
-### 4. 実行モード拡張
+`dist/` フォルダに実行ファイル (`OfficeSanitizer.exe` または `OfficeSanitizer.bin`) が生成されます。
+初回ビルド時はCコンパイラのダウンロードが走る場合があります。
 
-- dry-run（変更内容の確認のみ）
-- git diff 対象ファイルのみ処理
+## プロジェクト構成
 
----
-
-## Design Notes
-
-- `.xlsx / .pptx / .docx` は zip 形式
-- ライブラリレベルのAPIだけでは消しきれないメタデータがある
-- そのため、本ツールでは
-  - ライブラリ（openpyxl 等）
-  - zip 直編集（docProps 再構築）
-
-を併用している。
-
----
-
-## License
-
-MIT License
+- `main.py`: エントリーポイント
+- `build.py`: Nuitkaビルドスクリプト
+- `office_sanitizer/core/`: サニタイズロジック（独立モジュール）
+- `office_sanitizer/gui/`: PySide6 GUI実装
+- `office_sanitizer/cli.py`: CLI実装
+- `resources/`: アイコン等のリソースファイル置き場

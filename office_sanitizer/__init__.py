@@ -1,12 +1,16 @@
-from .excel import sanitize_excel, ExcelSanitizeOptions
-from .docx import sanitize_docx, WordSanitizeOptions
-from .pptx import sanitize_pptx, PowerPointSanitizeOptions
+from .core.xlsx_sanitizer import XlsxSanitizer, ExcelSanitizeOptions
+from .core.docx_sanitizer import DocxSanitizer, WordSanitizeOptions
+from .core.pptx_sanitizer import PptxSanitizer, PowerPointSanitizeOptions
+
+# Legacy compatibility (optional, but good for keeping API stable)
+# sanitize_excel = XlsxSanitizer().sanitize ... 
+# But for now, let's just expose the classes
 
 __all__ = [
-    "sanitize_excel",
+    "XlsxSanitizer",
     "ExcelSanitizeOptions",
-    "sanitize_docx",
+    "DocxSanitizer",
     "WordSanitizeOptions",
-    "sanitize_pptx",
+    "PptxSanitizer",
     "PowerPointSanitizeOptions",
 ]
