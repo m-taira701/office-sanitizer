@@ -1,4 +1,3 @@
 openpyxl
 PySide6
-nuitka
-zstandard
+pyinstaller
